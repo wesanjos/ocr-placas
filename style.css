@@ -72,6 +72,16 @@ body {
   gap: 10px;
   justify-content: center;
   margin: 15px 0;
+
+  @media (max-width: 768px) {
+    position: fixed;
+    width: auto;
+    margin: 0 auto;
+    left: 0;
+    right: 0;
+    z-index: 1;
+    top: 40px;
+  }
 }
 
 .controls__button {
@@ -129,7 +139,7 @@ body {
 
 .result__content {
   font-family: monospace;
-  white-space: pre-wrap;
+  /* white-space: pre-wrap; */
   font-size: 1.1rem;
   color: #34495e;
 }
@@ -140,4 +150,10 @@ body {
   margin-top: 10px;
   color: #7f8c8d;
   font-style: italic;
+}
+
+#canvas {
+  @media (max-width: 768px) {
+    display: none;
+  }
 }
