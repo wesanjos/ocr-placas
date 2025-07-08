@@ -37,6 +37,14 @@ body {
   flex-wrap: wrap;
   align-items: center;
   gap: 15px;
+  position: relative; /* Needed for overlay positioning */
+}
+
+/* Element: camera__view (video container) */
+.camera__view {
+  position: relative;
+  width: 100%;
+  max-width: 640px;
 }
 
 .camera__video {
@@ -156,4 +164,26 @@ body {
   @media (max-width: 768px) {
     display: none;
   }
+}
+
+/* BEM CSS - Element: camera__overlay */
+.camera__overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 80%;
+  aspect-ratio: 4 / 1; /* Approximate plate ratio 4:1 */
+  border: 3px dashed rgba(255, 255, 0, 0.9);
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 2;
+}
+/* Modifier suggestion for valid capture */
+.camera__overlay--success {
+  border-color: rgba(46, 204, 113, 0.9);
+}
+/* Modifier suggestion for warning */
+.camera__overlay--warning {
+  border-color: rgba(231, 76, 60, 0.9);
 }
