@@ -12,7 +12,10 @@
   <body>
     <div class="app">
       <div class="camera">
-        <video id="video" class="camera__video" autoplay></video>
+        <div class="camera__view">
+          <video id="video" class="camera__video" autoplay></video>
+          <div id="overlay" class="camera__overlay"></div>
+        </div>
         <canvas id="canvas" class="camera__canvas"></canvas>
         <canvas
           id="processed"
