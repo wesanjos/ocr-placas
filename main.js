@@ -3,6 +3,7 @@ const videoElement = document.getElementById("video");
 const canvasElement = document.getElementById("canvas");
 const processedCanvasElement = document.getElementById("processed");
 const plateCanvasElement = document.getElementById("plate"); // Canvas para a placa recortada
+const overlayElement = document.getElementById("overlay"); // Overlay para alinhamento
 const startButton = document.getElementById("startButton");
 const stopButton = document.getElementById("stopButton");
 const resultElement = document.getElementById("result");
@@ -15,6 +16,9 @@ let processingInterval;
 let capturedFrame = null; // Armazenar o frame capturado com a placa
 let isProcessingFrame = false; // Flag para controlar o estado do processamento
 const PLATE_ASPECT_RATIO = 3.0; // Proporção aproximada de placas brasileiras (largura/altura)
+// Overlay config
+const OVERLAY_WIDTH_RATIO = 0.8; // 80% da largura do frame
+const OVERLAY_ASPECT_RATIO = 4.0; // Largura / Altura
 
 // Function called when OpenCV is ready
 function onOpenCvReady() {
@@ -98,6 +102,7 @@ const detectLicensePlate = (src, dst) => {
 
     // Detectar bordas com Canny
     cv.Canny(blurred, edges, 50, 150, 3, false);
+
 
     // Dilatação para conectar bordas próximas
     const kernel = cv.Mat.ones(3, 3, cv.CV_8U);
@@ -349,6 +354,15 @@ const sortRectPoints = (points) => {
   return result;
 };
 
+// Helper to calcular ROI do overlay em pixels no frame
+const getOverlayRect = (frameWidth, frameHeight) => {
+  const overlayWidth = Math.round(frameWidth * OVERLAY_WIDTH_RATIO);
+  const overlayHeight = Math.round(overlayWidth / OVERLAY_ASPECT_RATIO);
+  const overlayX = Math.round((frameWidth - overlayWidth) / 2);
+  const overlayY = Math.round((frameHeight - overlayHeight) / 2);
+  return { x: overlayX, y: overlayY, width: overlayWidth, height: overlayHeight };
+};
+
 // Process image with OpenCV
 const processImage = async () => {
   // Check if OpenCV is ready
@@ -373,6 +387,13 @@ const processImage = async () => {
     // Create OpenCV matrices
     let src = cv.imread(canvasElement);
 
+    // Definir ROI baseado no overlay para limitar busca
+    const { x: roiX, y: roiY, width: roiW, height: roiH } = getOverlayRect(src.cols, src.rows);
+    const roiRect = new cv.Rect(roiX, roiY, roiW, roiH);
+    processedCanvasElement.width = roiW;
+    processedCanvasElement.height = roiH;
+    let srcRoi = src.roi(roiRect);
+
     console.log("Processing image with dimensions:", src.cols, "x", src.rows);
 
     // Check if source image has data
@@ -387,17 +408,21 @@ const processImage = async () => {
     let filtered = new cv.Mat();
 
     // Converter para escala de cinza
-    cv.cvtColor(src, gray, cv.COLOR_BGR2GRAY);
+    cv.cvtColor(srcRoi, gray, cv.COLOR_BGR2GRAY);
 
     // Aplicar filtro bilateral para reduzir ruído preservando bordas
     cv.bilateralFilter(gray, filtered, 9, 75, 75, cv.BORDER_DEFAULT);
 
-    // Detectar e recortar placa
-    const plateResult = detectLicensePlate(src, processedCanvasElement);
+    // Detectar e recortar placa apenas dentro da ROI
+    const plateResult = detectLicensePlate(srcRoi, processedCanvasElement);
+
+    // Feedback visual no overlay
+    overlayElement.classList.toggle("camera__overlay--success", plateResult.found);
+    overlayElement.classList.toggle("camera__overlay--warning", !plateResult.found);
 
     if (plateResult.found) {
       // Se encontrou uma placa e não estamos processando um frame capturado
-      if (!isProcessingFrame) {
+      if (plateResult.found && !isProcessingFrame) {
         // Parar o processamento contínuo
         if (processingInterval) {
           clearInterval(processingInterval);
@@ -430,6 +455,7 @@ const processImage = async () => {
     }
 
     // Clean up OpenCV objects
+    srcRoi.delete();
     src.delete();
     gray.delete();
     filtered.delete();
@@ -521,45 +547,90 @@ const processPlateFrame = async (plateResult) => {
     resultElement.appendChild(document.createElement("br"));
     resultElement.appendChild(downloadLink);
 
+    const base64Image = dataURL.split(",")[1];
+
+    const API_KEY = "AIzaSyDLwtuBaL3mY3VBcoPIYZLNw5ZN9Kf-LOo";
+    let text = "";
+
+    fetch(`https://vision.googleapis.com/v1/images:annotate?key=${API_KEY}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        requests: [
+          {
+            image: { content: base64Image },
+            features: [{ type: "TEXT_DETECTION" }]
+          }
+        ]
+      })
+    }).then((res) =>
+      res.json().then((data) => {
+        console.log("res.json() :>> ", data);
+        const textFromGoogleVision =
+          data.responses?.[0]?.textAnnotations?.[0]?.description ||
+          "Nenhum texto encontrado.";
+        console.log("textFromGoogleVision :>> ", textFromGoogleVision);
+        text = textFromGoogleVision;
+
+        resultElement.innerHTML =
+          `<strong>Texto reconhecido:</strong> ${
+            textFromGoogleVision || "Nenhum texto reconhecido na placa."
+          }` +
+          `<br><a href="${dataURL}" download="placa_processada_${timestamp}.png" class="download-link">Baixar imagem da placa</a>` +
+          `<br><button id="resetButton" class="controls__button controls__button--reset">Capturar nova placa</button>`;
+      })
+    );
+
     // Realizar OCR na imagem processada com configurações específicas para placas
-    const {
-      data: { text }
-    } = await Tesseract.recognize(dataURL, "por", {
-      logger: (m) => console.log(m),
-      tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", // Apenas letras e números
-      tessedit_pageseg_mode: "7" // Modo de segmentação: linha única
-    });
+    // const {
+    //   data: { text }
+    // } = await Tesseract.recognize(dataURL, "por", {
+    //   logger: (m) => console.log(m),
+    //   tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", // Apenas letras e números
+    //   tessedit_pageseg_mode: "7" // Modo de segmentação: linha única
+    // });
 
-    // Lista de palavras a serem ignoradas (como "BRASIL" que aparece nas placas)
-    const wordsToIgnore = ["BRASIL", "BR", "MERCOSUL"];
+    // // Lista de palavras a serem ignoradas (como "BRASIL" que aparece nas placas)
+    // const wordsToIgnore = ["BRASIL", "BR", "MERCOSUL"];
 
-    // Processar o texto reconhecido
-    let processedText = text.trim();
+    // // Processar o texto reconhecido
+    // let processedText = textFromGoogleVision.trim();
 
-    // Remover as palavras a serem ignoradas
-    wordsToIgnore.forEach((word) => {
-      const regex = new RegExp(word, "gi"); // case insensitive
-      processedText = processedText.replace(regex, "");
-    });
+    // // Remover as palavras a serem ignoradas
+    // wordsToIgnore.forEach((word) => {
+    //   const regex = new RegExp(word, "gi"); // case insensitive
+    //   processedText = processedText.replace(regex, "");
+    // });
 
-    // Remover caracteres inválidos e espaços
-    processedText = processedText.replace(/[^A-Z0-9]/g, "").toUpperCase();
+    // // Remover caracteres inválidos e espaços
+    // processedText = processedText.replace(/[^A-Z0-9]/g, "").toUpperCase();
 
-    // Formatar o texto para o padrão de placa brasileira (se possível)
-    if (processedText.length >= 7) {
-      // Tentar formatar como placa padrão (AAA0000 ou AAA0A00)
-      const isNewFormat = /[A-Z]{3}[0-9][A-Z][0-9]{2}/.test(
-        processedText.substring(0, 7)
-      );
-      const isOldFormat = /[A-Z]{3}[0-9]{4}/.test(
-        processedText.substring(0, 7)
-      );
+    // // Formatar o texto para o padrão de placa brasileira (se possível)
+    // if (processedText.length >= 7) {
+    //   // Tentar formatar como placa padrão (AAA0000 ou AAA0A00)
+    //   const isNewFormat = /[A-Z]{3}[0-9][A-Z][0-9]{2}/.test(
+    //     processedText.substring(0, 7)
+    //   );
+    //   const isOldFormat = /[A-Z]{3}[0-9]{4}/.test(
+    //     processedText.substring(0, 7)
+    //   );
 
-      if (isNewFormat || isOldFormat) {
-        // Extrair apenas os 7 caracteres da placa
-        processedText = processedText.substring(0, 7);
-      }
-    }
+    //   if (isNewFormat || isOldFormat) {
+    //     // Extrair apenas os 7 caracteres da placa
+    //     processedText = processedText.substring(0, 7);
+    //   }
+    // }
+
+    //     // Mostrar resultado do OCR
+    // // Mostrar resultado do OCR
+    // resultElement.innerHTML =
+    //   `<strong>Texto reconhecido:</strong> ${
+    //     processedText || "Nenhum texto reconhecido na placa."
+    //   }` +
+    //   `<br><a href="${dataURL}" download="placa_processada_${timestamp}.png" class="download-link">Baixar imagem da placa</a>` +
+    //   `<br><button id="resetButton" class="controls__button controls__button--reset">Capturar nova placa</button>`;
 
     // Limpar recursos OpenCV
     plateImage.delete();
@@ -572,28 +643,20 @@ const processPlateFrame = async (plateResult) => {
     kernel.delete();
     clahe.delete();
 
-    // Mostrar resultado do OCR
-    resultElement.innerHTML =
-      `<strong>Texto reconhecido:</strong> ${
-        processedText || "Nenhum texto reconhecido na placa."
-      }` +
-      `<br><a href="${dataURL}" download="placa_processada_${timestamp}.png" class="download-link">Baixar imagem da placa</a>` +
-      `<br><button id="resetButton" class="controls__button controls__button--reset">Capturar nova placa</button>`;
-
     // Adicionar evento ao botão de reset
-    document
-      .getElementById("resetButton")
-      .addEventListener("click", resetCapture);
+    // document
+    //   .getElementById("resetButton")
+    //   .addEventListener("click", resetCapture);
   } catch (error) {
     console.error("Error processing plate:", error);
     resultElement.textContent =
       "Erro no processamento da placa: " + error.message;
 
-    // Adicionar botão de reset mesmo em caso de erro
-    resultElement.innerHTML += `<br><button id="resetButton" class="controls__button controls__button--reset">Tentar novamente</button>`;
-    document
-      .getElementById("resetButton")
-      .addEventListener("click", resetCapture);
+    // // Adicionar botão de reset mesmo em caso de erro
+    // resultElement.innerHTML += `<br><button id="resetButton" class="controls__button controls__button--reset">Tentar novamente</button>`;
+    // document
+    //   .getElementById("resetButton")
+    //   .addEventListener("click", resetCapture);
   }
 };
 
@@ -615,6 +678,7 @@ const resetCapture = () => {
     }, 500);
   }
 
+  overlayElement.classList.remove("camera__overlay--success", "camera__overlay--warning");
   resultElement.textContent = "Procurando nova placa...";
 };
 
@@ -627,6 +691,7 @@ const handleStartButton = async () => {
   }
   isProcessingFrame = false;
 
+  overlayElement.classList.remove("camera__overlay--success", "camera__overlay--warning");
   resultElement.textContent = "Processando...";
 
   // Iniciar processamento contínuo
@@ -656,6 +721,7 @@ const handleStopButton = () => {
 
   if (stream) {
     stream.getTracks().forEach((track) => track.stop());
+    overlayElement.classList.remove("camera__overlay--success", "camera__overlay--warning");
     resultElement.textContent = "Câmera desligada";
   }
 };
